@@ -97,10 +97,7 @@ public class ShortestCluePlugin extends Plugin
 	private MouseManager mouseManager;
 
 	@Inject
-	private StashUnits stashUnits;
-
-	@Inject
-	private StashOverlay stashOverlay;
+	private DwmsStashes stashes;
 
 	private DebugClueController debugController;
 
@@ -135,11 +132,6 @@ public class ShortestCluePlugin extends Plugin
 	private Item[] emoteItemsCarried;
 
 	private List<Set<Integer>> emoteItems = List.of();
-
-	/**
-	 * Whether the emote clue's STASH unit is built but not known to be filled or empty.
-	 */
-	private volatile boolean stashUnknown;
 
 	/**
 	 * Clue steps that are only reachable through the Wilderness, so their path is
@@ -224,17 +216,12 @@ public class ShortestCluePlugin extends Plugin
 		return clueScrollPlugin;
 	}
 
-	boolean isStashUnknown()
-	{
-		return stashUnknown;
-	}
-
 	@Override
 	protected void startUp()
 	{
-		eventBus.register(stashUnits);
-		overlayManager.add(stashOverlay);
-		clientThread.invoke(stashUnits::load);
+		eventBus.register(stashes);
+		// Learns whether Dude, Where's My Stuff? is there before an emote clue's path waits for it
+		clientThread.invoke(stashes::request);
 		if (config.showDebugPanel())
 		{
 			debug().installPanel();
@@ -257,9 +244,8 @@ public class ShortestCluePlugin extends Plugin
 	protected void shutDown()
 	{
 		clearPathIfOurs();
-		eventBus.unregister(stashUnits);
-		overlayManager.remove(stashOverlay);
-		stashUnknown = false;
+		eventBus.unregister(stashes);
+		stashes.reset();
 		if (this.debugController != null)
 		{
 			this.debugController.shutdown();
@@ -281,8 +267,6 @@ public class ShortestCluePlugin extends Plugin
 		}
 
 		ClueScroll clue = debug().getFakeClue() != null ? debug().getFakeClue() : clueService.getClue();
-		stashUnknown = config.requireItems() && clue instanceof EmoteClue
-			&& stashUnits.isUnknown(((EmoteClue) clue).getStashUnit());
 		if (clue == null)
 		{
 			// No answer or bank change brings back a path for a clue that's gone
@@ -305,6 +289,13 @@ public class ShortestCluePlugin extends Plugin
 		{
 			log.warn("Failed to resolve clue destinations for {}", clue.getClass().getSimpleName(), e);
 			debug().updateFakeClueMapPoints(null);
+			return;
+		}
+
+		if (config.requireItems() && clue instanceof EmoteClue && stashes.waitForAnswer((EmoteClue) clue))
+		{
+			// Dude, Where's My Stuff? hasn't said yet whether the STASH unit holds the items
+			debug().updateFakeClueMapPoints(clue);
 			return;
 		}
 
@@ -353,7 +344,7 @@ public class ShortestCluePlugin extends Plugin
 	 */
 	private List<Set<Integer>> emoteItems(EmoteClue clue)
 	{
-		if (stashUnits.isFilled(clue.getStashUnit()))
+		if (stashes.isFilled(clue))
 		{
 			return List.of();
 		}
